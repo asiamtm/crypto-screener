@@ -27,6 +27,7 @@ def load_symbols():
     return df.symbol.astype(str).tolist()
 
 def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2):
+    print(f"Fetching data for {symbol} with interval {interval}...")
     url = f"{SPOT_BASE}/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         res = requests.get(url, timeout=10)
@@ -36,9 +37,10 @@ def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2):
             "ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
         df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
         df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+        print(f"Data fetched for {symbol}: {len(df)} rows")
         return df
-    except requests.exceptions.RequestException as e:
-        print(f"Request error for {symbol}: {e}")
+    except Exception as e:
+        print(f"Failed to fetch {symbol}: {e}")
         return pd.DataFrame()
 
 def fetch_btc_trend():
@@ -55,7 +57,6 @@ def run_screening():
     btc_close, btc_ema21, btcBelow = fetch_btc_trend()
 
     for s in syms:
-        print(f"Processing symbol: {s}")  # Add a print statement to debug symbol being processed
         df = fetch_ohlcv(s, PAIR_TF)
         if df.empty or len(df) < ATR_LEN:
             continue
@@ -96,7 +97,6 @@ def run_screening():
     return df_all, btc_close, btc_ema21
 
 st.title("🔥 Crypto PRE-DIP / PRE-PUMP Screener")
-
 with st.spinner("🔄 Loading latest data..."):
     df, btc_close, btc_ema21 = run_screening()
 
