@@ -63,6 +63,10 @@ async def fetch_btc_ema_and_close(client):
     return btc_close, btc_ema21, btc_close < btc_ema21
 
 async def load_and_screen():
+    if not BINANCE_API_KEY or not BINANCE_API_SECRET:
+        st.warning("Binance API keys are missing. Running in offline demo mode.")
+        return pd.DataFrame(), 0.0, 0.0, 0.0
+
     syms = load_symbols()
     try:
         client = await AsyncClient.create(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
@@ -122,7 +126,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-if not df.empty:
+if not df.empty and "Score" in df.columns:
     if any(df['Score'] == 3):
         st.error("🚨 FULL PRE-DIP DETECTED! Act Fast.")
     elif any(df['Score'] == 2):
