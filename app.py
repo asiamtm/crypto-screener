@@ -21,35 +21,26 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Add logging to track data fetching
-def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2, retries=3, delay=5):
-    url = f"{SPOT_BASE}/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    print(f"Fetching data for {symbol}")  # Log the symbol being fetched
-    for attempt in range(retries):
-        try:
-            res = requests.get(url, timeout=10)
-            res.raise_for_status()  # Will raise an HTTPError if status code is not 2xx
-            data = res.json()
-            print(f"Data fetched for {symbol}: {data[:3]}...")  # Show a small part of the data
-            df = pd.DataFrame(data, columns=["ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
-            df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
-            df["ts"] = pd.to_datetime(df["ts"], unit="ms")
-            return df
-        except requests.exceptions.RequestException as e:
-            print(f"Attempt {attempt+1} failed for {symbol}: {e}")
-            if attempt < retries - 1:
-                time.sleep(delay)  # Wait before retrying
-            else:
-                print(f"Failed to fetch data for {symbol} after {retries} attempts.")
-                return pd.DataFrame()  # Return empty DataFrame on failure
-
-# Load symbols
 @st.cache_data(ttl=REFRESH_MIN * 60)
 def load_symbols():
     df = pd.read_csv("Tickers.csv", header=None, names=["symbol"])
     return df.symbol.astype(str).tolist()
 
-# Fetch BTC trend
+def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2):
+    url = f"{SPOT_BASE}/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    try:
+        res = requests.get(url, timeout=10)
+        res.raise_for_status()
+        data = res.json()
+        df = pd.DataFrame(data, columns=[
+            "ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
+        df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
+        df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+        return df
+    except requests.exceptions.RequestException as e:
+        print(f"Request error for {symbol}: {e}")
+        return pd.DataFrame()
+
 def fetch_btc_trend():
     df = fetch_ohlcv("BTCUSDT", BTC_TF, 22)
     if df.empty:
@@ -58,13 +49,13 @@ def fetch_btc_trend():
     ema = df.c.ewm(span=21).mean().iat[-1]
     return close, ema, close < ema
 
-# Main screening function
 def run_screening():
     syms = load_symbols()
     rows = []
     btc_close, btc_ema21, btcBelow = fetch_btc_trend()
 
     for s in syms:
+        print(f"Processing symbol: {s}")  # Add a print statement to debug symbol being processed
         df = fetch_ohlcv(s, PAIR_TF)
         if df.empty or len(df) < ATR_LEN:
             continue
@@ -104,8 +95,8 @@ def run_screening():
     df_all = pd.DataFrame(rows).sort_values("Score", ascending=False)
     return df_all, btc_close, btc_ema21
 
-# Streamlit UI
 st.title("🔥 Crypto PRE-DIP / PRE-PUMP Screener")
+
 with st.spinner("🔄 Loading latest data..."):
     df, btc_close, btc_ema21 = run_screening()
 
