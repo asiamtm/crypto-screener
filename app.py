@@ -63,16 +63,16 @@ async def fetch_btc_ema_and_close(client):
     return btc_close, btc_ema21, btc_close < btc_ema21
 
 async def load_and_screen():
-    if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-        st.warning("🔒 Binance API keys not set — skipping live data.")
-        return pd.DataFrame(), 0.0, 0.0, 0.0
+    if BINANCE_API_KEY is None or BINANCE_API_SECRET is None:
+        st.warning("🔒 Binance API keys not found in Streamlit Secrets — skipping live data.")
+        return pd.DataFrame(), 30.0, 0.0, 0.0
 
     syms = load_symbols()
     try:
         client = await AsyncClient.create(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
     except Exception as e:
         st.error(f"❌ Binance API connection failed: {e}")
-        return pd.DataFrame(), 0.0, 0.0, 0.0
+        return pd.DataFrame(), 30.0, 0.0, 0.0
 
     btc_close, btc_ema21, btcBelow = await fetch_btc_ema_and_close(client)
     tasks = [fetch_ohlcv(client, s, PAIR_TF, ATR_LEN + 30) for s in syms]
