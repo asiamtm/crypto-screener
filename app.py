@@ -13,7 +13,15 @@ ATR_LEN = 96
 BODY_FCTR = 0.3
 VOL_MULT = 2.5
 
+# The spot base URL for Binance public API
 SPOT_BASE = "https://api.binance.com/api/v3"
+
+# List of valid spot symbols from Binance (ensure they are only spot market pairs)
+VALID_SYMBOLS = [
+    'BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'BNBUSDT', 'SOLUSDT', 'DOGEUSDT', 'MATICUSDT', 
+    'XRPUSDT', 'LTCUSDT', 'BCHUSDT', 'AVAXUSDT', 'DOTUSDT', 'LINKUSDT', 'FILUSDT',
+    'TRXUSDT', 'AAVEUSDT', 'SANDUSDT', 'GALAUSDT', 'ALGOUSDT', 'MANAUSDT', 'SUSHIUSDT'
+]
 
 st.set_page_config(
     page_title="🔥 Crypto PRE-DIP Screener",
@@ -21,14 +29,16 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# Load the symbols from CSV file, but ensure only valid symbols are considered
 @st.cache_data(ttl=REFRESH_MIN * 60)
 def load_symbols():
-    # Load symbols from CSV
     df = pd.read_csv("Tickers.csv", header=None, names=["symbol"])
     symbols = df.symbol.astype(str).tolist()
-    st.write(f"Symbols Loaded: {symbols}")  # Debugging output
-    return symbols
+    valid_symbols = [symbol for symbol in symbols if symbol in VALID_SYMBOLS]
+    st.write(f"Symbols Loaded: {valid_symbols}")  # Debugging output
+    return valid_symbols
 
+# Function to fetch OHLCV data
 def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2):
     url = f"{SPOT_BASE}/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
@@ -44,6 +54,7 @@ def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2):
         print(f"Failed to fetch {symbol}: {e}")
         return pd.DataFrame()
 
+# Function to fetch BTC trend data
 def fetch_btc_trend():
     df = fetch_ohlcv("BTCUSDT", BTC_TF, 22)
     if df.empty:
@@ -52,8 +63,9 @@ def fetch_btc_trend():
     ema = df.c.ewm(span=21).mean().iat[-1]
     return close, ema, close < ema
 
+# Function to run the screening process
 def run_screening():
-    syms = load_symbols()  # Load symbols here
+    syms = load_symbols()  # Load valid symbols here
     rows = []
     btc_close, btc_ema21, btcBelow = fetch_btc_trend()
 
@@ -106,6 +118,7 @@ def run_screening():
 
     return df_all, btc_close, btc_ema21
 
+# Streamlit UI
 st.title("🔥 Crypto PRE-DIP / PRE-PUMP Screener")
 with st.spinner("🔄 Loading latest data..."):
     df, btc_close, btc_ema21 = run_screening()
