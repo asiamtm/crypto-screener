@@ -81,9 +81,7 @@ async def load_and_screen():
     syms = load_symbols()
     client = AsyncClient(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
     await client._init_session()  # Avoids ping that gets blocked
-
-Add Binance API key support
-    
+  
     frates = await fetch_funding(client, syms)
     funding_values = [f for f in frates.values() if not np.isnan(f) and f != 0.0]
     dynamic_threshold = np.percentile(funding_values, 25) if funding_values else -0.0001
