@@ -8,8 +8,8 @@ import sys
 import os
 
 # Load Binance API keys from secrets
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
+BINANCE_API_KEY = st.secrets["BINANCE_API_KEY"]
+BINANCE_API_SECRET = st.secrets["BINANCE_API_SECRET"]
 
 # Auto-install missing packages
 for pkg in ["matplotlib", "plotly"]:
