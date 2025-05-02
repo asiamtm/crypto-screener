@@ -1,4 +1,6 @@
-
+<p align="center">
+  <img src="https://raw.githubusercontent.com/asiamtm/crypto-screener/media/banner.png" width="80%">
+</p>
 <h1 align="center">🔥 Crypto PRE-DIP / PRE-PUMP Screener</h1>
 <p align="center">
   <strong>Spot-based crypto screener for early dip signals</strong><br>
