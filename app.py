@@ -117,11 +117,11 @@ async def load_and_screen():
         atr = AverageTrueRange(df.h, df.l, df.c, ATR_LEN).average_true_range().iat[-1]
         vavg = df.v.tail(ATR_LEN).mean()
 
-        conditions = [
-            btcBelow,
-            close < base - BODY_FCTR * atr and vol > vavg * VOL_MULT,
-            fr < dynamic_threshold
-        ]
+        cond1 = bool(btcBelow)
+        cond2 = bool(close < base - BODY_FCTR * atr and vol > vavg * VOL_MULT)
+        cond3 = bool(fr < dynamic_threshold)
+        conditions = [cond1, cond2, cond3]
+
         score = sum(conditions)
 
         if score >= 1:
