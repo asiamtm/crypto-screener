@@ -79,8 +79,8 @@ async def fetch_btc_ema_and_close(client):
 
 async def load_and_screen():
     syms = load_symbols()
-   client = AsyncClient(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
-await client._init_session()  # Avoids ping that gets blocked
+    client = AsyncClient(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
+    await client._init_session()  # Avoids ping that gets blocked
 
 Add Binance API key support
     
