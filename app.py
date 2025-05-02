@@ -27,7 +27,7 @@ st.set_page_config(
 
 REFRESH_MIN = 15
 BTC_SPOT = "BTCUSDT"
-SYMS_CSV = "tickers.csv"
+SYMS_CSV = "Tickers.csv"
 PAIR_TF = "15m"
 BTC_TF = "4h"
 ATR_LEN = 96
