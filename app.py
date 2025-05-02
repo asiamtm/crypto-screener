@@ -23,8 +23,11 @@ st.set_page_config(
 
 @st.cache_data(ttl=REFRESH_MIN * 60)
 def load_symbols():
+    # Load symbols from CSV
     df = pd.read_csv("Tickers.csv", header=None, names=["symbol"])
-    return df.symbol.astype(str).tolist()
+    symbols = df.symbol.astype(str).tolist()
+    st.write(f"Symbols Loaded: {symbols}")  # Debugging output
+    return symbols
 
 def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2):
     url = f"{SPOT_BASE}/klines?symbol={symbol}&interval={interval}&limit={limit}"
@@ -50,13 +53,16 @@ def fetch_btc_trend():
     return close, ema, close < ema
 
 def run_screening():
-    syms = load_symbols()
+    syms = load_symbols()  # Load symbols here
     rows = []
     btc_close, btc_ema21, btcBelow = fetch_btc_trend()
+
+    st.write(f"Screening {len(syms)} symbols...")  # Debugging output
 
     for s in syms:
         df = fetch_ohlcv(s, PAIR_TF)
         if df.empty or len(df) < ATR_LEN:
+            st.write(f"Skipping {s} (no data or insufficient data)")  # Debugging output
             continue
 
         close = df.c.iat[-1]
@@ -132,4 +138,3 @@ else:
             st.dataframe(subset.set_index("Symbol"))
 
 st.write(f"🕒 Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-
