@@ -7,9 +7,9 @@ import subprocess
 import sys
 import os
 
-# Load Binance API keys from Streamlit Secrets
-BINANCE_API_KEY = st.secrets.get("BINANCE_API_KEY")
-BINANCE_API_SECRET = st.secrets.get("BINANCE_API_SECRET")
+# Load Binance API keys from either environment or secrets
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", st.secrets.get("BINANCE_API_KEY"))
+BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", st.secrets.get("BINANCE_API_SECRET"))
 
 # Auto-install required packages
 for pkg in ["matplotlib", "plotly"]:
@@ -89,7 +89,7 @@ async def load_and_screen():
 
         cond1 = btcBelow
         cond2 = close < base - BODY_FCTR * atr and vol > vavg * VOL_MULT
-        cond3 = rsi < 30  # Spot-based dip signal
+        cond3 = rsi < 30
         conditions = [cond1, cond2, cond3]
 
         score = sum(conditions)
@@ -143,43 +143,44 @@ st.markdown(f"""
 3. RSI < 30 (Spot-based condition)
 """)
 
-for score_level, label in zip([3, 2, 1], ["🚨 FULL PRE-DIP 🚨", "⚠️ NEAR-DIP", "🔥 WARM-DIP"]):
-    subset = df[df['Score'] == score_level]
-    if not subset.empty:
-        st.subheader(label)
-        for _, row in subset.iterrows():
-            with st.expander(f"{row['Symbol']} | RSI: {row['FundingRate']:.2f}"):
-                c1, c2, c3 = row['BTC<EMA21'], row['Weak+Vol'], row['RSI<30']
-                st.write(f"BTC<EMA21: {'🟢' if c1 else '🔴'}")
-                st.write(f"Weak+Vol: {'🟢' if c2 else '🔴'}")
-                st.write(f"RSI<30: {'🟢' if c3 else '🔴'}")
+if not df.empty and "Score" in df.columns:
+    for score_level, label in zip([3, 2, 1], ["🚨 FULL PRE-DIP 🚨", "⚠️ NEAR-DIP", "🔥 WARM-DIP"]):
+        subset = df[df['Score'] == score_level]
+        if not subset.empty:
+            st.subheader(label)
+            for _, row in subset.iterrows():
+                with st.expander(f"{row['Symbol']} | RSI: {row['FundingRate']:.2f}"):
+                    c1, c2, c3 = row['BTC<EMA21'], row['Weak+Vol'], row['RSI<30']
+                    st.write(f"BTC<EMA21: {'🟢' if c1 else '🔴'}")
+                    st.write(f"Weak+Vol: {'🟢' if c2 else '🔴'}")
+                    st.write(f"RSI<30: {'🟢' if c3 else '🔴'}")
 
-                chart_df = row['Chart'][['ts', 'o', 'h', 'l', 'c', 'v']].rename(
-                    columns={"ts": "Time", "o": "Open", "h": "High", "l": "Low", "c": "Close", "v": "Volume"})
-                chart_df.set_index("Time", inplace=True)
-                chart_df['EMA21'] = chart_df['Close'].ewm(span=21).mean()
-                chart_df['VolSpike'] = chart_df['Volume'] > chart_df['Volume'].rolling(ATR_LEN).mean() * VOL_MULT
+                    chart_df = row['Chart'][['ts', 'o', 'h', 'l', 'c', 'v']].rename(
+                        columns={"ts": "Time", "o": "Open", "h": "High", "l": "Low", "c": "Close", "v": "Volume"})
+                    chart_df.set_index("Time", inplace=True)
+                    chart_df['EMA21'] = chart_df['Close'].ewm(span=21).mean()
+                    chart_df['VolSpike'] = chart_df['Volume'] > chart_df['Volume'].rolling(ATR_LEN).mean() * VOL_MULT
 
-                fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                                    vertical_spacing=0.02, row_heights=[0.7, 0.3])
+                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                        vertical_spacing=0.02, row_heights=[0.7, 0.3])
 
-                fig.add_trace(go.Candlestick(
-                    x=chart_df.index,
-                    open=chart_df['Open'], high=chart_df['High'],
-                    low=chart_df['Low'], close=chart_df['Close'], name='Candles'), row=1, col=1)
+                    fig.add_trace(go.Candlestick(
+                        x=chart_df.index,
+                        open=chart_df['Open'], high=chart_df['High'],
+                        low=chart_df['Low'], close=chart_df['Close'], name='Candles'), row=1, col=1)
 
-                fig.add_trace(go.Scatter(
-                    x=chart_df.index, y=chart_df['EMA21'],
-                    mode='lines', name='EMA21', line=dict(color='orange', dash='dash')), row=1, col=1)
+                    fig.add_trace(go.Scatter(
+                        x=chart_df.index, y=chart_df['EMA21'],
+                        mode='lines', name='EMA21', line=dict(color='orange', dash='dash')), row=1, col=1)
 
-                fig.add_trace(go.Bar(
-                    x=chart_df.index, y=chart_df['Volume'],
-                    name='Volume', marker_color=['red' if v else 'gray' for v in chart_df['VolSpike']]),
-                    row=2, col=1)
+                    fig.add_trace(go.Bar(
+                        x=chart_df.index, y=chart_df['Volume'],
+                        name='Volume', marker_color=['red' if v else 'gray' for v in chart_df['VolSpike']]),
+                        row=2, col=1)
 
-                fig.update_layout(height=500, margin=dict(l=10, r=10, t=20, b=20),
-                                  showlegend=True, xaxis_rangeslider_visible=False)
+                    fig.update_layout(height=500, margin=dict(l=10, r=10, t=20, b=20),
+                                      showlegend=True, xaxis_rangeslider_visible=False)
 
-                st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True)
 
 st.write(f"🕒 Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S')}")
