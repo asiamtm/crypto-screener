@@ -7,9 +7,9 @@ import subprocess
 import sys
 import os
 
-# Load Binance API keys from either environment or secrets
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", st.secrets.get("BINANCE_API_KEY"))
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", st.secrets.get("BINANCE_API_SECRET"))
+# Load Binance API keys from Streamlit secrets only
+BINANCE_API_KEY = st.secrets.get("BINANCE_API_KEY")
+BINANCE_API_SECRET = st.secrets.get("BINANCE_API_SECRET")
 
 # Auto-install required packages
 for pkg in ["matplotlib", "plotly"]:
@@ -64,7 +64,7 @@ async def fetch_btc_ema_and_close(client):
 
 async def load_and_screen():
     if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-        st.warning("Binance API keys are missing. Running in offline demo mode.")
+        st.warning("🔒 Binance API keys not set — skipping live data.")
         return pd.DataFrame(), 0.0, 0.0, 0.0
 
     syms = load_symbols()
@@ -75,7 +75,6 @@ async def load_and_screen():
         return pd.DataFrame(), 0.0, 0.0, 0.0
 
     btc_close, btc_ema21, btcBelow = await fetch_btc_ema_and_close(client)
-
     tasks = [fetch_ohlcv(client, s, PAIR_TF, ATR_LEN + 30) for s in syms]
     ohlcvs = await asyncio.gather(*tasks)
     await client.close_connection()
@@ -113,7 +112,6 @@ async def load_and_screen():
     df_all = pd.DataFrame(rows).sort_values("Score", ascending=False)
     return df_all, 30.0, btc_close, btc_ema21
 
-# ==== UI ====
 st.title("🔥 Crypto PRE-DIP / PRE-PUMP Screener")
 
 with st.spinner("🔄 Fetching data & screening..."):
