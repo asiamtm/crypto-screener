@@ -79,11 +79,12 @@ def run_screening():
         conditions = [cond1, cond2, cond3]
         score = sum(conditions)
 
+        # Ensure the Score is added to each row
         if score >= 1:
             state = {3: "🚨 FULL PRE-DIP", 2: "⚠️ NEAR-DIP", 1: "🔥 WARM-DIP"}[score]
             rows.append({
                 "Symbol": s,
-                "Score": score,
+                "Score": score,  # Add the Score here
                 "BTC<EMA21": cond1,
                 "Weak+Vol": cond2,
                 "RSI<30": cond3,
@@ -91,7 +92,12 @@ def run_screening():
                 "State": state
             })
 
-    df_all = pd.DataFrame(rows).sort_values("Score", ascending=False)
+    # Ensure that DataFrame is created properly
+    if rows:
+        df_all = pd.DataFrame(rows).sort_values("Score", ascending=False)
+    else:
+        df_all = pd.DataFrame()  # If no rows are added, return an empty DataFrame
+
     return df_all, btc_close, btc_ema21
 
 st.title("🔥 Crypto PRE-DIP / PRE-PUMP Screener")
@@ -126,3 +132,4 @@ else:
             st.dataframe(subset.set_index("Symbol"))
 
 st.write(f"🕒 Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
