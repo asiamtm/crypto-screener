@@ -21,11 +21,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# Load symbols from the CSV file
 @st.cache_data(ttl=REFRESH_MIN * 60)
 def load_symbols():
     df = pd.read_csv("Tickers.csv", header=None, names=["symbol"])
     return df.symbol.astype(str).tolist()
 
+# Retry logic for fetching data
 def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2, retries=3, delay=5):
     url = f"{SPOT_BASE}/klines?symbol={symbol}&interval={interval}&limit={limit}"
     
@@ -34,20 +36,19 @@ def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2, retries=3, delay=5):
             res = requests.get(url, timeout=10)
             res.raise_for_status()
             data = res.json()
-            df = pd.DataFrame(data, columns=[
-                "ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
+            df = pd.DataFrame(data, columns=["ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
             df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
             df["ts"] = pd.to_datetime(df["ts"], unit="ms")
             return df
-        except Exception as e:
-            print(f"Failed to fetch {symbol}, attempt {attempt + 1}: {e}")
+        except requests.exceptions.RequestException as e:
+            print(f"Attempt {attempt+1} failed for {symbol}: {e}")
             if attempt < retries - 1:
-                print(f"Retrying in {delay} seconds...")
-                time.sleep(delay)  # Wait before retrying
+                time.sleep(delay)  # wait before retrying
             else:
-                print(f"Failed to fetch {symbol} after {retries} attempts.")
-                return pd.DataFrame()  # Return empty DataFrame if all retries fail
+                print(f"Failed to fetch data for {symbol} after {retries} attempts.")
+                return pd.DataFrame()  # return empty DataFrame on failure
 
+# Fetch BTC trend (EMA and close)
 def fetch_btc_trend():
     df = fetch_ohlcv("BTCUSDT", BTC_TF, 22)
     if df.empty:
@@ -56,14 +57,16 @@ def fetch_btc_trend():
     ema = df.c.ewm(span=21).mean().iat[-1]
     return close, ema, close < ema
 
+# Main screening function
 def run_screening():
-    syms = load_symbols()
+    syms = load_symbols()  # List of symbols to screen
     rows = []
     btc_close, btc_ema21, btcBelow = fetch_btc_trend()
 
     for s in syms:
         df = fetch_ohlcv(s, PAIR_TF)
-        if df.empty or len(df) < ATR_LEN:
+        if df.empty or len(df) < ATR_LEN:  # Skip if no data or insufficient data
+            print(f"Skipping {s} (no data or insufficient data)")
             continue
 
         close = df.c.iat[-1]
@@ -72,6 +75,7 @@ def run_screening():
         atr = AverageTrueRange(df.h, df.l, df.c, ATR_LEN).average_true_range().iat[-1]
         vavg = df.v.tail(ATR_LEN).mean()
 
+        # Calculate RSI
         gain = df.c.pct_change().fillna(0)
         delta = gain.rolling(14).mean()
         loss = (-gain).rolling(14).mean()
@@ -79,6 +83,7 @@ def run_screening():
         rsi = 100 - (100 / (1 + rs))
         rsi_val = rsi.iat[-1] if not rsi.empty else 50
 
+        # Check conditions
         cond1 = btcBelow
         cond2 = close < base - BODY_FCTR * atr and vol > vavg * VOL_MULT
         cond3 = rsi_val < 30
@@ -101,6 +106,7 @@ def run_screening():
     df_all = pd.DataFrame(rows).sort_values("Score", ascending=False)
     return df_all, btc_close, btc_ema21
 
+# Streamlit interface
 st.title("🔥 Crypto PRE-DIP / PRE-PUMP Screener")
 with st.spinner("🔄 Loading latest data..."):
     df, btc_close, btc_ema21 = run_screening()
