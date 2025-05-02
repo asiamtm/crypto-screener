@@ -6,6 +6,10 @@ import streamlit as st
 import subprocess
 import sys
 
+import os
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
+BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
+
 # Auto-install missing packages
 for pkg in ["matplotlib", "plotly"]:
     try:
@@ -75,8 +79,10 @@ async def fetch_btc_ema_and_close(client):
 
 async def load_and_screen():
     syms = load_symbols()
-    client = await AsyncClient.create()
+    client = await AsyncClient.create(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
 
+Add Binance API key support
+    
     frates = await fetch_funding(client, syms)
     funding_values = [f for f in frates.values() if not np.isnan(f) and f != 0.0]
     dynamic_threshold = np.percentile(funding_values, 25) if funding_values else -0.0001
