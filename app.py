@@ -1,152 +1,163 @@
-import requests
+import time
 import pandas as pd
 import numpy as np
 import streamlit as st
-import time
-from datetime import datetime, timedelta
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from ta.volatility import AverageTrueRange
 from ta.momentum import RSIIndicator
-from plotly.subplots import make_subplots
-import plotly.graph_objects as go
+import requests
 
-# === CONFIG ===
-BTC_SYMBOL = "BTCUSDT"
-SYMBOL_LIST_URL = "https://api.binance.com/api/v3/exchangeInfo"
-CANDLE_URL = "https://api.binance.com/api/v3/klines"
+st.set_page_config(
+    page_title="🔥 Crypto PRE-DIP / PRE-PUMP Screener",
+    layout="wide"
+)
+
+# Constants
+REFRESH_MIN = 15
+BTC_SPOT = "BTCUSDT"
+SYMS_CSV = "Tickers.csv"
 PAIR_TF = "15m"
 BTC_TF = "4h"
 ATR_LEN = 96
 BODY_FCTR = 0.3
 VOL_MULT = 2.5
-RSI_LEN = 14
 
-# === UI ===
-st.set_page_config(page_title="🔥 PRE-DIP SCREENER", layout="wide")
+@st.cache_data(ttl=REFRESH_MIN * 60)
+def load_symbols():
+    df = pd.read_csv(SYMS_CSV, header=None, names=["symbol"])
+    return df.symbol.astype(str).tolist()
+
+def get_klines(symbol, interval="15m", limit=100):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    try:
+        data = requests.get(url, timeout=10).json()
+        df = pd.DataFrame(data, columns=[
+            "ts","o","h","l","c","v","x1","x2","x3","x4","x5","x6"
+        ])
+        df = df.astype({"o":"float","h":"float","l":"float","c":"float","v":"float"})
+        df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+        return df
+    except Exception as e:
+        return pd.DataFrame()
+
+def get_btc_trend():
+    df = get_klines(BTC_SPOT, interval=BTC_TF, limit=22)
+    if df.empty:
+        return 0, 0, False
+    btc_close = df["c"].iat[-1]
+    btc_ema21 = df["c"].rolling(21).mean().iat[-1]
+    return btc_close, btc_ema21, btc_close < btc_ema21
+
+@st.cache_data(ttl=REFRESH_MIN * 60)
+def run_screening():
+    syms = load_symbols()
+    btc_close, btc_ema21, btc_below = get_btc_trend()
+    rows = []
+
+    for sym in syms:
+        df = get_klines(sym, interval=PAIR_TF, limit=ATR_LEN + 2)
+        if df.empty or len(df) < ATR_LEN:
+            continue
+
+        close, vol = df["c"].iat[-1], df["v"].iat[-1]
+        base = df["c"].tail(ATR_LEN).mean()
+        atr = AverageTrueRange(df["h"], df["l"], df["c"], ATR_LEN).average_true_range().iat[-1]
+        vavg = df["v"].tail(ATR_LEN).mean()
+        rsi = RSIIndicator(df["c"], window=14).rsi().iat[-1]
+
+        cond1 = btc_below
+        cond2 = close < base - BODY_FCTR * atr and vol > vavg * VOL_MULT
+        cond3 = rsi < 30
+        score = sum([cond1, cond2, cond3])
+
+        if score >= 1:
+            rows.append({
+                "Symbol": sym,
+                "Score": score,
+                "BTC<EMA21": cond1,
+                "Weak+Vol": cond2,
+                "RSI<30": cond3,
+                "RSI": rsi,
+                "Chart": df
+            })
+
+    df_all = pd.DataFrame(rows).sort_values("Score", ascending=False)
+    return df_all, btc_close, btc_ema21
+
+# Run app
 st.title("🔥 Crypto PRE-DIP / PRE-PUMP Screener")
 
-# === Functions ===
+with st.spinner("🔄 Fetching data..."):
+    df, btc_close, btc_ema21 = run_screening()
 
-@st.cache_data(ttl=900)
-def get_spot_symbols():
-    res = requests.get(SYMBOL_LIST_URL).json()
-    return [s["symbol"] for s in res["symbols"] if s["quoteAsset"] == "USDT" and s["status"] == "TRADING"]
-
-@st.cache_data(ttl=900)
-def fetch_ohlcv(symbol, interval, limit=100):
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
-    res = requests.get(CANDLE_URL, params=params).json()
-    if not isinstance(res, list): return pd.DataFrame()
-    df = pd.DataFrame(res, columns=[
-        "ts", "o", "h", "l", "c", "v", "_", "_", "_", "_", "_", "_"
-    ])
-    df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
-    df["ts"] = pd.to_datetime(df["ts"], unit="ms")
-    return df
-
-def compute_conditions(df, btc_below):
-    if df.empty or len(df) < ATR_LEN:
-        return None
-
-    close, vol = df["c"].iloc[-1], df["v"].iloc[-1]
-    base = df["c"].tail(ATR_LEN).mean()
-    atr = AverageTrueRange(df["h"], df["l"], df["c"], ATR_LEN).average_true_range().iloc[-1]
-    vavg = df["v"].tail(ATR_LEN).mean()
-    rsi = RSIIndicator(df["c"], window=RSI_LEN).rsi().iloc[-1]
-
-    cond1 = btc_below
-    cond2 = close < base - BODY_FCTR * atr and vol > vavg * VOL_MULT
-    cond3 = rsi < 30
-
-    return cond1, cond2, cond3, close, vol, atr, rsi
-
-@st.cache_data(ttl=900)
-def screen():
-    symbols = get_spot_symbols()
-    btc_df = fetch_ohlcv(BTC_SYMBOL, BTC_TF, 22)
-    btc_close = btc_df["c"].iloc[-1] if not btc_df.empty else 0
-    btc_ema21 = btc_df["c"].ewm(span=21).mean().iloc[-1] if not btc_df.empty else 0
-    btc_below = btc_close < btc_ema21 if btc_close and btc_ema21 else False
-
-    rows = []
-    for symbol in symbols:
-        df = fetch_ohlcv(symbol, PAIR_TF, ATR_LEN + 2)
-        result = compute_conditions(df, btc_below)
-        if result:
-            c1, c2, c3, close, vol, atr, rsi = result
-            score = sum([c1, c2, c3])
-            if score > 0:
-                rows.append({
-                    "Symbol": symbol,
-                    "Score": score,
-                    "BTC<EMA21": c1,
-                    "Weak+Vol": c2,
-                    "RSI<30": c3,
-                    "RSI": rsi,
-                    "Chart": df
-                })
-
-    df = pd.DataFrame(rows).sort_values("Score", ascending=False)
-    return df, btc_close, btc_ema21
-
-# === Run Screen ===
-with st.spinner("🔄 Screening market..."):
-    df, btc_close, btc_ema21 = screen()
-
-# === BTC Status ===
 st.markdown(
-    f"<div style='font-size:150%; font-weight:bold;'>"
-    f"BTCUSDT (4h) — Close: {btc_close:.2f} | EMA-21: {btc_ema21:.2f} | "
-    f"Status: {'🟢 Below EMA' if btc_close < btc_ema21 else '🔴 Above EMA'}"
-    f"</div>", unsafe_allow_html=True)
+    f"""<div style='font-size:150%; font-weight:bold;'>
+    BTCUSDT (4h) — Close: {btc_close:.2f} | EMA-21: {btc_ema21:.2f} | Status: {'🟢 Below EMA' if btc_close < btc_ema21 else '🔴 Above EMA'}
+    </div>""",
+    unsafe_allow_html=True
+)
 
-# === Dip Alerts ===
 if not df.empty:
-    if any(df['Score'] == 3): st.error("🚨 FULL PRE-DIP DETECTED")
-    elif any(df['Score'] == 2): st.warning("⚠️ NEAR-DIP Signals Present")
-    elif any(df['Score'] == 1): st.info("🔥 Warm dips in market")
+    if any(df["Score"] == 3):
+        st.error("🚨 FULL PRE-DIP DETECTED! Act Fast.")
+    elif any(df["Score"] == 2):
+        st.warning("⚠️ NEAR-DIP Conditions Detected.")
+    elif any(df["Score"] == 1):
+        st.info("🔥 Only warm dips at the moment.")
 else:
-    st.success("✅ No dip triggers met right now")
+    st.success("✅ No dip conditions met right now. Market may be stable or bullish.")
 
-# === Legend ===
 st.markdown(f"""
 ### 🚦 Condition Indicators
-- 🟢 = **Condition Met**  🔴 = **Not Met**
+- 🟢 = **Condition Met**
+- 🔴 = **Condition Not Met**
 
 **Conditions:**
 1. BTC < EMA-21 (4h)
-2. Weak price + volume spike (15m)
-3. RSI < 30
+2. Weak Price + Vol Spike (15m)
+3. RSI < 30 (Spot-based condition)
 """)
 
-# === Output Charts ===
-for score, label in zip([3, 2, 1], ["🚨 FULL PRE-DIP 🚨", "⚠️ NEAR-DIP", "🔥 WARM-DIP"]):
-    subset = df[df["Score"] == score]
+for score_level, label in zip([3, 2, 1], ["🚨 FULL PRE-DIP 🚨", "⚠️ NEAR-DIP", "🔥 WARM-DIP"]):
+    subset = df[df["Score"] == score_level]
     if not subset.empty:
         st.subheader(label)
         for _, row in subset.iterrows():
             with st.expander(f"{row['Symbol']} | RSI: {row['RSI']:.2f}"):
-                c1, c2, c3 = row["BTC<EMA21"], row["Weak+Vol"], row["RSI<30"]
-                st.write(f"BTC<EMA21: {'🟢' if c1 else '🔴'}")
-                st.write(f"Weak+Vol: {'🟢' if c2 else '🔴'}")
-                st.write(f"RSI<30: {'🟢' if c3 else '🔴'}")
+                st.write(f"BTC<EMA21: {'🟢' if row['BTC<EMA21'] else '🔴'}")
+                st.write(f"Weak+Vol: {'🟢' if row['Weak+Vol'] else '🔴'}")
+                st.write(f"RSI<30: {'🟢' if row['RSI<30'] else '🔴'}")
 
-                dfc = row['Chart'].copy()
-                dfc.rename(columns={"ts": "Time", "o": "Open", "h": "High", "l": "Low", "c": "Close", "v": "Volume"}, inplace=True)
-                dfc.set_index("Time", inplace=True)
+                chart_df = row["Chart"][["ts", "o", "h", "l", "c", "v"]].rename(
+                    columns={"ts": "Time", "o": "Open", "h": "High", "l": "Low", "c": "Close", "v": "Volume"})
+                chart_df.set_index("Time", inplace=True)
+                chart_df["EMA21"] = chart_df["Close"].ewm(span=21).mean()
+                chart_df["VolSpike"] = chart_df["Volume"] > chart_df["Volume"].rolling(ATR_LEN).mean() * VOL_MULT
 
-                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
+                fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                    vertical_spacing=0.02, row_heights=[0.7, 0.3])
+
                 fig.add_trace(go.Candlestick(
-                    x=dfc.index, open=dfc["Open"], high=dfc["High"],
-                    low=dfc["Low"], close=dfc["Close"], name="Candles"), row=1, col=1)
+                    x=chart_df.index,
+                    open=chart_df["Open"], high=chart_df["High"],
+                    low=chart_df["Low"], close=chart_df["Close"], name="Candles"), row=1, col=1)
+
                 fig.add_trace(go.Scatter(
-                    x=dfc.index, y=dfc["Close"].ewm(span=21).mean(),
-                    mode="lines", name="EMA21", line=dict(color="orange", dash="dot")), row=1, col=1)
+                    x=chart_df.index, y=chart_df["EMA21"],
+                    mode="lines", name="EMA21", line=dict(color="orange", dash="dash")), row=1, col=1)
+
                 fig.add_trace(go.Bar(
-                    x=dfc.index, y=dfc["Volume"], name="Volume", marker_color="grey"), row=2, col=1)
+                    x=chart_df.index, y=chart_df["Volume"],
+                    name="Volume", marker_color=["red" if v else "gray" for v in chart_df["VolSpike"]]),
+                    row=2, col=1)
 
                 fig.update_layout(
-                    height=500, margin=dict(l=10, r=10, t=30, b=20),
-                    showlegend=True, xaxis_rangeslider_visible=False)
+                    height=500,
+                    margin=dict(l=10, r=10, t=20, b=20),
+                    showlegend=True,
+                    xaxis_rangeslider_visible=False
+                )
 
                 st.plotly_chart(fig, use_container_width=True)
 
