@@ -81,9 +81,6 @@ async def fetch_btc_ema_and_close(client):
     btc_ema21 = float(btc_df[4].astype(float).rolling(21).mean().iat[-1])
     return btc_close, btc_ema21, btc_close < btc_ema21
 
-from binance import AsyncClient
-AsyncClient.ping = staticmethod(lambda *args, **kwargs: None)  # Disable ping method
-
 async def load_and_screen():
     syms = load_symbols()
 
@@ -139,3 +136,38 @@ async def load_and_screen():
 
     df_all = pd.DataFrame(rows).sort_values("Score", ascending=False)
     return df_all, dynamic_threshold, btc_close, btc_ema21
+
+# ──────────────────────────────────────────────────────────────
+# OUTPUT SECTION
+# ──────────────────────────────────────────────────────────────
+st.title("🔥 Crypto PRE-DIP / PRE-PUMP Screener")
+
+try:
+    with st.spinner("🔄 Fetching data & screening..."):
+        df, dynamic_threshold, btc_close, btc_ema21 = asyncio.run(load_and_screen())
+except Exception as e:
+    st.error(f"❌ App failed with error: {e}")
+    st.stop()
+
+if not df.empty:
+    st.success(f"✅ {len(df)} symbols met at least 1 trigger condition.")
+else:
+    st.warning("⚠️ No triggers met currently.")
+
+st.markdown(
+    f"""<div style='font-size:150%; font-weight:bold;'>
+    BTCUSDT (4h) — Close: {btc_close:.2f} | EMA-21: {btc_ema21:.2f} | Status: {'🟢 Below EMA' if btc_close < btc_ema21 else '🔴 Above EMA'}
+    </div>""",
+    unsafe_allow_html=True
+)
+
+st.markdown(f"""
+### 🚦 Condition Indicators
+- 🟢 = **Condition Met**
+- 🔴 = **Condition Not Met**
+
+**Conditions:**
+1. BTC < EMA-21 (4h)
+2. Weak Price + Vol Spike (15m)
+3. Funding Rate below dynamic threshold ({dynamic_threshold:.6f})
+""")
