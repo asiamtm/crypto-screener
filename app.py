@@ -1,112 +1,94 @@
-import streamlit as st
+import time
 import pandas as pd
 import numpy as np
-import time
-import subprocess
-import sys
-import requests
-from ta.volatility import AverageTrueRange
-from ta import momentum
-
-# Install missing packages (if local)
-for pkg in ["plotly"]:
-    try:
-        __import__(pkg)
-    except ImportError:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
-
+import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from ta.momentum import RSIIndicator
+from ta.trend import EMAIndicator
+from binance.client import Client
 
+# --- Config ---
 st.set_page_config(page_title="🔥 Crypto PRE-DIP / PRE-PUMP Screener", layout="wide")
 
-# Constants
-REFRESH_MIN = 15
-BTC_SPOT = "BTCUSDT"
-SYMS_CSV = "Tickers.csv"
-PAIR_TF = "15m"
-BTC_TF = "4h"
+BTC_SYMBOL = "BTCUSDT"
+PAIR_TF = Client.KLINE_INTERVAL_15MINUTE
+BTC_TF = Client.KLINE_INTERVAL_4HOUR
+TICKERS = ["ETHUSDT", "XRPUSDT", "SOLUSDT", "LTCUSDT", "BNBUSDT"]  # Adjust as needed
 ATR_LEN = 96
-BODY_FCTR = 0.3
+RSI_LEN = 14
 VOL_MULT = 2.5
+BODY_FCTR = 0.3
 
-@st.cache_data(ttl=REFRESH_MIN * 60)
-def load_symbols():
-    df = pd.read_csv(SYMS_CSV, header=None, names=["symbol"])
-    return df.symbol.astype(str).tolist()
+# --- Binance Auth ---
+BINANCE_API_KEY = st.secrets.get("BINANCE_API_KEY", "")
+BINANCE_API_SECRET = st.secrets.get("BINANCE_API_SECRET", "")
+client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
 
-def get_klines(symbol, interval, limit):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+# --- BTC EMA Trend ---
+def get_btc_trend():
+    klines = client.get_klines(symbol=BTC_SYMBOL, interval=BTC_TF, limit=22)
+    closes = pd.Series([float(x[4]) for x in klines])
+    btc_close = closes.iloc[-1]
+    btc_ema21 = closes.ewm(span=21).mean().iloc[-1]
+    return btc_close, btc_ema21, btc_close < btc_ema21
+
+# --- Fetch OHLCV ---
+def get_ohlcv(symbol):
     try:
-        data = requests.get(url, timeout=10).json()
-        if isinstance(data, dict) and "code" in data:
-            return pd.DataFrame()  # Error response
-        df = pd.DataFrame(data, columns=[
-            "Time", "Open", "High", "Low", "Close", "Volume",
-            "x1", "x2", "x3", "x4", "x5", "x6"
+        klines = client.get_klines(symbol=symbol, interval=PAIR_TF, limit=ATR_LEN + 2)
+        df = pd.DataFrame(klines, columns=[
+            "ts", "o", "h", "l", "c", "v", "c1", "c2", "c3", "c4", "c5", "c6"
         ])
-        df["Time"] = pd.to_datetime(df["Time"], unit="ms")
-        df = df.astype({
-            "Open": "float", "High": "float", "Low": "float",
-            "Close": "float", "Volume": "float"
-        })
-        return df[["Time", "Open", "High", "Low", "Close", "Volume"]]
-    except Exception:
+        df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
+        df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+        return df[["ts", "o", "h", "l", "c", "v"]]
+    except:
         return pd.DataFrame()
 
-@st.cache_data(ttl=REFRESH_MIN * 60)
+# --- Run Screener ---
 def run_screening():
-    syms = load_symbols()
+    btc_close, btc_ema21, btcBelow = get_btc_trend()
     rows = []
 
-    btc_df = get_klines(BTC_SPOT, BTC_TF, 22)
-    if btc_df.empty:
-        return pd.DataFrame(columns=["Symbol", "Score", "BTC<EMA21", "Weak+Vol", "RSI<30", "State", "Chart"]), 0.0, 0.0
-
-    btc_close = btc_df["Close"].iat[-1]
-    btc_ema21 = btc_df["Close"].ewm(span=21).mean().iat[-1]
-    btcBelow = btc_close < btc_ema21
-
-    for symbol in syms:
-        df = get_klines(symbol, PAIR_TF, ATR_LEN + 2)
+    for symbol in TICKERS:
+        df = get_ohlcv(symbol)
         if df.empty or len(df) < ATR_LEN:
             continue
 
-        close = df["Close"].iat[-1]
-        vol = df["Volume"].iat[-1]
-        base = df["Close"].tail(ATR_LEN).mean()
-        vavg = df["Volume"].tail(ATR_LEN).mean()
-        atr = AverageTrueRange(df["High"], df["Low"], df["Close"], ATR_LEN).average_true_range().iat[-1]
-        rsi = momentum.RSIIndicator(df["Close"], window=14).rsi().iat[-1]
+        close, vol = df.c.iat[-1], df.v.iat[-1]
+        base = df.c.tail(ATR_LEN).mean()
+        atr = df.h.tail(ATR_LEN).max() - df.l.tail(ATR_LEN).min()
+        vavg = df.v.tail(ATR_LEN).mean()
+
+        rsi = RSIIndicator(close=df["c"], window=RSI_LEN).rsi().iat[-1]
 
         cond1 = btcBelow
         cond2 = close < base - BODY_FCTR * atr and vol > vavg * VOL_MULT
         cond3 = rsi < 30
+
         conditions = [cond1, cond2, cond3]
         score = sum(conditions)
 
-        if score >= 1:
-            state = {3: "🚨 FULL PRE-DIP 🚨", 2: "⚠️ NEAR-DIP", 1: "🔥 WARM-DIP"}[score]
+        if score > 0:
             rows.append({
                 "Symbol": symbol,
                 "Score": score,
                 "BTC<EMA21": cond1,
                 "Weak+Vol": cond2,
                 "RSI<30": cond3,
-                "State": state,
+                "RSI": rsi,
                 "Chart": df
             })
-
-    if not rows:
-        return pd.DataFrame(columns=["Symbol", "Score", "BTC<EMA21", "Weak+Vol", "RSI<30", "State", "Chart"]), btc_close, btc_ema21
 
     df_all = pd.DataFrame(rows).sort_values("Score", ascending=False)
     return df_all, btc_close, btc_ema21
 
-# UI
+# === UI ===
+
 st.title("🔥 Crypto PRE-DIP / PRE-PUMP Screener")
 
-with st.spinner("🔄 Fetching data & screening..."):
+with st.spinner("🔄 Fetching market data..."):
     df, btc_close, btc_ema21 = run_screening()
 
 st.markdown(
@@ -116,17 +98,12 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-if not df.empty:
-    if any(df["Score"] == 3):
-        st.error("🚨 FULL PRE-DIP DETECTED! Act Fast.")
-    elif any(df["Score"] == 2):
-        st.warning("⚠️ NEAR-DIP Conditions Detected.")
-    elif any(df["Score"] == 1):
-        st.info("🔥 Only warm dips at the moment.")
-else:
+if df.empty:
     st.success("✅ No dip conditions met right now. Market may be stable or bullish.")
+else:
+    st.warning("⚠️ Some dip conditions met. Review below.")
 
-st.markdown(f"""
+st.markdown("""
 ### 🚦 Condition Indicators
 - 🟢 = **Condition Met**
 - 🔴 = **Condition Not Met**
@@ -137,43 +114,31 @@ st.markdown(f"""
 3. RSI < 30 (Spot-based condition)
 """)
 
-if df.empty:
-    st.warning("No triggers met currently.")
-else:
-    for score_level, label in zip([3, 2, 1], ["🚨 FULL PRE-DIP 🚨", "⚠️ NEAR-DIP", "🔥 WARM-DIP"]):
-        subset = df[df['Score'] == score_level]
-        if not subset.empty:
-            st.subheader(label)
-            for _, row in subset.iterrows():
-                with st.expander(f"{row['Symbol']} | {row['State']}"):
-                    c1, c2, c3 = row['BTC<EMA21'], row['Weak+Vol'], row['RSI<30']
-                    st.write(f"BTC<EMA21: {'🟢' if c1 else '🔴'}")
-                    st.write(f"Weak+Vol: {'🟢' if c2 else '🔴'}")
-                    st.write(f"RSI<30: {'🟢' if c3 else '🔴'}")
+for score_level, label in zip([3, 2, 1], ["🚨 FULL PRE-DIP 🚨", "⚠️ NEAR-DIP", "🔥 WARM-DIP"]):
+    subset = df[df["Score"] == score_level]
+    if not subset.empty:
+        st.subheader(label)
+        for _, row in subset.iterrows():
+            with st.expander(f"{row['Symbol']} | RSI: {row['RSI']:.1f}"):
+                st.write(f"BTC<EMA21: {'🟢' if row['BTC<EMA21'] else '🔴'}")
+                st.write(f"Weak+Vol: {'🟢' if row['Weak+Vol'] else '🔴'}")
+                st.write(f"RSI<30: {'🟢' if row['RSI<30'] else '🔴'}")
 
-                    chart_df = row["Chart"].copy()
-                    chart_df["EMA21"] = chart_df["Close"].ewm(span=21).mean()
-                    chart_df["VolSpike"] = chart_df["Volume"] > chart_df["Volume"].rolling(ATR_LEN).mean() * VOL_MULT
+                df_chart = row["Chart"]
+                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
+                fig.add_trace(go.Candlestick(
+                    x=df_chart["ts"], open=df_chart["o"], high=df_chart["h"],
+                    low=df_chart["l"], close=df_chart["c"], name="Candles"
+                ), row=1, col=1)
+                fig.add_trace(go.Bar(
+                    x=df_chart["ts"], y=df_chart["v"], name="Volume"
+                ), row=2, col=1)
 
-                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_heights=[0.7, 0.3])
-
-                    fig.add_trace(go.Candlestick(
-                        x=chart_df["Time"],
-                        open=chart_df["Open"], high=chart_df["High"],
-                        low=chart_df["Low"], close=chart_df["Close"], name="Candles"), row=1, col=1)
-
-                    fig.add_trace(go.Scatter(
-                        x=chart_df["Time"], y=chart_df["EMA21"],
-                        mode='lines', name="EMA21", line=dict(color='orange', dash='dash')), row=1, col=1)
-
-                    fig.add_trace(go.Bar(
-                        x=chart_df["Time"], y=chart_df["Volume"],
-                        name="Volume", marker_color=['red' if spike else 'gray' for spike in chart_df["VolSpike"]]),
-                        row=2, col=1)
-
-                    fig.update_layout(height=500, margin=dict(l=10, r=10, t=20, b=20),
-                                      showlegend=True, xaxis_rangeslider_visible=False)
-
-                    st.plotly_chart(fig, use_container_width=True)
+                fig.update_layout(
+                    height=500,
+                    showlegend=False,
+                    xaxis_rangeslider_visible=False
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
 st.write(f"🕒 Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S')}")
