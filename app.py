@@ -13,15 +13,7 @@ ATR_LEN = 96
 BODY_FCTR = 0.3
 VOL_MULT = 2.5
 
-# The spot base URL for Binance public API
 SPOT_BASE = "https://api.binance.com/api/v3"
-
-# List of valid spot symbols from Binance (ensure they are only spot market pairs)
-VALID_SYMBOLS = [
-    'BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'BNBUSDT', 'SOLUSDT', 'DOGEUSDT', 'MATICUSDT', 
-    'XRPUSDT', 'LTCUSDT', 'BCHUSDT', 'AVAXUSDT', 'DOTUSDT', 'LINKUSDT', 'FILUSDT',
-    'TRXUSDT', 'AAVEUSDT', 'SANDUSDT', 'GALAUSDT', 'ALGOUSDT', 'MANAUSDT', 'SUSHIUSDT'
-]
 
 st.set_page_config(
     page_title="🔥 Crypto PRE-DIP Screener",
@@ -29,32 +21,33 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Load the symbols from CSV file, but ensure only valid symbols are considered
 @st.cache_data(ttl=REFRESH_MIN * 60)
 def load_symbols():
     df = pd.read_csv("Tickers.csv", header=None, names=["symbol"])
-    symbols = df.symbol.astype(str).tolist()
-    valid_symbols = [symbol for symbol in symbols if symbol in VALID_SYMBOLS]
-    st.write(f"Symbols Loaded: {valid_symbols}")  # Debugging output
-    return valid_symbols
+    return df.symbol.astype(str).tolist()
 
-# Function to fetch OHLCV data
-def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2):
+def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2, retries=3, delay=5):
     url = f"{SPOT_BASE}/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    try:
-        res = requests.get(url, timeout=10)
-        res.raise_for_status()
-        data = res.json()
-        df = pd.DataFrame(data, columns=[
-            "ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
-        df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
-        df["ts"] = pd.to_datetime(df["ts"], unit="ms")
-        return df
-    except Exception as e:
-        print(f"Failed to fetch {symbol}: {e}")
-        return pd.DataFrame()
+    
+    for attempt in range(retries):
+        try:
+            res = requests.get(url, timeout=10)
+            res.raise_for_status()
+            data = res.json()
+            df = pd.DataFrame(data, columns=[
+                "ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
+            df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
+            df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+            return df
+        except Exception as e:
+            print(f"Failed to fetch {symbol}, attempt {attempt + 1}: {e}")
+            if attempt < retries - 1:
+                print(f"Retrying in {delay} seconds...")
+                time.sleep(delay)  # Wait before retrying
+            else:
+                print(f"Failed to fetch {symbol} after {retries} attempts.")
+                return pd.DataFrame()  # Return empty DataFrame if all retries fail
 
-# Function to fetch BTC trend data
 def fetch_btc_trend():
     df = fetch_ohlcv("BTCUSDT", BTC_TF, 22)
     if df.empty:
@@ -63,18 +56,14 @@ def fetch_btc_trend():
     ema = df.c.ewm(span=21).mean().iat[-1]
     return close, ema, close < ema
 
-# Function to run the screening process
 def run_screening():
-    syms = load_symbols()  # Load valid symbols here
+    syms = load_symbols()
     rows = []
     btc_close, btc_ema21, btcBelow = fetch_btc_trend()
-
-    st.write(f"Screening {len(syms)} symbols...")  # Debugging output
 
     for s in syms:
         df = fetch_ohlcv(s, PAIR_TF)
         if df.empty or len(df) < ATR_LEN:
-            st.write(f"Skipping {s} (no data or insufficient data)")  # Debugging output
             continue
 
         close = df.c.iat[-1]
@@ -97,12 +86,11 @@ def run_screening():
         conditions = [cond1, cond2, cond3]
         score = sum(conditions)
 
-        # Ensure the Score is added to each row
         if score >= 1:
             state = {3: "🚨 FULL PRE-DIP", 2: "⚠️ NEAR-DIP", 1: "🔥 WARM-DIP"}[score]
             rows.append({
                 "Symbol": s,
-                "Score": score,  # Add the Score here
+                "Score": score,
                 "BTC<EMA21": cond1,
                 "Weak+Vol": cond2,
                 "RSI<30": cond3,
@@ -110,15 +98,9 @@ def run_screening():
                 "State": state
             })
 
-    # Ensure that DataFrame is created properly
-    if rows:
-        df_all = pd.DataFrame(rows).sort_values("Score", ascending=False)
-    else:
-        df_all = pd.DataFrame()  # If no rows are added, return an empty DataFrame
-
+    df_all = pd.DataFrame(rows).sort_values("Score", ascending=False)
     return df_all, btc_close, btc_ema21
 
-# Streamlit UI
 st.title("🔥 Crypto PRE-DIP / PRE-PUMP Screener")
 with st.spinner("🔄 Loading latest data..."):
     df, btc_close, btc_ema21 = run_screening()
