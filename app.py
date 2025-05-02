@@ -81,9 +81,20 @@ async def fetch_btc_ema_and_close(client):
     btc_ema21 = float(btc_df[4].astype(float).rolling(21).mean().iat[-1])
     return btc_close, btc_ema21, btc_close < btc_ema21
 
+from binance import AsyncClient
+AsyncClient.ping = staticmethod(lambda *args, **kwargs: None)  # Disable ping method
+
 async def load_and_screen():
     syms = load_symbols()
-    client = await AsyncClient.create(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
+
+    try:
+        client = await AsyncClient.create(
+            api_key=BINANCE_API_KEY,
+            api_secret=BINANCE_API_SECRET
+        )
+    except Exception as e:
+        st.error(f"❌ Binance API connection failed: {e}")
+        return pd.DataFrame(), 0.0, 0.0, 0.0
 
     frates = await fetch_funding(client, syms)
     funding_values = [f for f in frates.values() if not np.isnan(f) and f != 0.0]
