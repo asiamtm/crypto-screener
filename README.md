@@ -7,7 +7,7 @@
 
 <p align="center">
   <img alt="Streamlit" src="https://img.shields.io/badge/Streamlit-Cloud-red?logo=streamlit&logoColor=white">
-  <img alt="License" src="https://img.shields.io/github/license/asiamtm/crypto-screener">
+  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white">
 </p>
 
