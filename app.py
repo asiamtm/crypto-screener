@@ -26,21 +26,25 @@ def load_symbols():
     df = pd.read_csv("Tickers.csv", header=None, names=["symbol"])
     return df.symbol.astype(str).tolist()
 
-def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2):
-    print(f"Fetching data for {symbol} with interval {interval}...")
+def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2, retries=3, delay=5):
     url = f"{SPOT_BASE}/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
-        res = requests.get(url, timeout=10)
-        res.raise_for_status()
-        data = res.json()
-        df = pd.DataFrame(data, columns=[
-            "ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
-        df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
-        df["ts"] = pd.to_datetime(df["ts"], unit="ms")
-        print(f"Data fetched for {symbol}: {len(df)} rows")
-        return df
+        for _ in range(retries):
+            try:
+                res = requests.get(url, timeout=10)
+                res.raise_for_status()
+                data = res.json()
+                df = pd.DataFrame(data, columns=[
+                    "ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
+                df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
+                df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+                return df
+            except requests.exceptions.RequestException as e:
+                print(f"Failed to fetch {symbol}: {e}, retrying...")
+                time.sleep(delay)
+        return pd.DataFrame()
     except Exception as e:
-        print(f"Failed to fetch {symbol}: {e}")
+        print(f"Error while fetching data: {e}")
         return pd.DataFrame()
 
 def fetch_btc_trend():
