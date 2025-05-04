@@ -4,7 +4,6 @@ import streamlit as st
 import requests
 import time
 from ta.volatility import AverageTrueRange
-import concurrent.futures
 
 # === CONFIG ===
 REFRESH_MIN = 15
@@ -31,7 +30,6 @@ if st.button("Clear Cache"):
 def load_symbols():
     try:
         # For testing, use a small list of symbols
-        # Replace with pd.read_csv("Tickers.csv", ...) once confirmed working
         symbols = ["BTCUSDT", "ETHUSDT", "ADAUSDT", "BNBUSDT", "XRPUSDT"]
         # Uncomment below to use Tickers.csv
         # df = pd.read_csv("Tickers.csv", header=None, names=["symbol"])
@@ -50,6 +48,9 @@ def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2, retries=3):
             res = requests.get(url, timeout=10)
             res.raise_for_status()
             data = res.json()
+            if not data:
+                st.warning(f"No data returned for {symbol}")
+                return pd.DataFrame()
             df = pd.DataFrame(data, columns=["ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
             df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
             df["ts"] = pd.to_datetime(df["ts"], unit="ms")
@@ -62,8 +63,8 @@ def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2, retries=3):
 
 def fetch_btc_trend():
     df = fetch_ohlcv("BTCUSDT", BTC_TF, 22)
-    if df.empty:
-        st.warning("No data available for BTCUSDT.")
+    if df.empty or len(df) < 22:
+        st.warning("No or insufficient data for BTCUSDT.")
         return 0.0, 0.0, False
     close = df.c.iat[-1]
     ema = df.c.ewm(span=21).mean().iat[-1]
@@ -83,43 +84,61 @@ def run_screening():
     total_syms = len(syms)
 
     for i, s in enumerate(syms):
-        df = fetch_ohlcv(s, PAIR_TF)
-        time.sleep(0.5)  # Delay to avoid rate limits
-        if df.empty or len(df) < ATR_LEN:
-            st.write(f"Skipping {s} (no data or insufficient data)")
+        try:
+            df = fetch_ohlcv(s, PAIR_TF)
+            time.sleep(0.5)  # Delay to avoid rate limits
+            if df.empty or len(df) < ATR_LEN:
+                st.write(f"Skipping {s} (no data or insufficient data)")
+                continue
+
+            close = df.c.iat[-1]
+            vol = df.v.iat[-1]
+            base = df.c.tail(ATR_LEN).mean()
+            atr = AverageTrueRange(df.h, df.l, df.c, ATR_LEN).average_true_range().iat[-1]
+            vavg = df.v.tail(ATR_LEN).mean()
+
+            # Validate calculations
+            if any(pd.isna(x) for x in [base, atr, vavg]):
+                st.write(f"Skipping {s} (invalid base, atr, or vavg)")
+                continue
+
+            # RSI calculation with validation
+            gain = df.c.pct_change().fillna(0)
+            if len(gain) < 14:
+                st.write(f"Skipping {s} (insufficient data for RSI)")
+                continue
+
+            delta = gain.rolling(14).mean()
+            loss = (-gain).rolling(14).mean()
+
+            # Avoid division by zero
+            rs = delta / loss
+            rs = rs.replace([np.inf, -np.inf], np.nan).fillna(0)
+            rsi = 100 - (100 / (1 + rs))
+            rsi_val = rsi.iat[-1] if not rsi.empty else 50
+
+            cond1 = btcBelow
+            cond2 = close < base - BODY_FCTR * atr and vol > vavg * VOL_MULT
+            cond3 = rsi_val < 30
+
+            conditions = [cond1, cond2, cond3]
+            score = sum(conditions)
+
+            if score >= 1:
+                state = {3: "🚨 FULL PRE-DIP", 2: "⚠️ NEAR-DIP", 1: "🔥 WARM-DIP"}[score]
+                rows.append({
+                    "Symbol": s,
+                    "Score": score,
+                    "BTC<EMA21": cond1,
+                    "Weak+Vol": cond2,
+                    "RSI<30": cond3,
+                    "RSI": rsi_val,
+                    "State": state
+                })
+
+        except Exception as e:
+            st.error(f"Error processing {s}: {e}")
             continue
-
-        close = df.c.iat[-1]
-        vol = df.v.iat[-1]
-        base = df.c.tail(ATR_LEN).mean()
-        atr = AverageTrueRange(df.h, df.l, df.c, ATR_LEN).average_true_range().iat[-1]
-        vavg = df.v.tail(ATR_LEN).mean()
-
-        gain = df.c.pct_change().fillna(0)
-        delta = gain.rolling(14).mean()
-        loss = (-gain).rolling(14).mean()
-        rs = delta / loss
-        rsi = 100 - (100 / (1 + rs))
-        rsi_val = rsi.iat[-1] if not rsi.empty else 50
-
-        cond1 = btcBelow
-        cond2 = close < base - BODY_FCTR * atr and vol > vavg * VOL_MULT
-        cond3 = rsi_val < 30
-
-        conditions = [cond1, cond2, cond3]
-        score = sum(conditions)
-
-        if score >= 1:
-            state = {3: "🚨 FULL PRE-DIP", 2: "⚠️ NEAR-DIP", 1: "🔥 WARM-DIP"}[score]
-            rows.append({
-                "Symbol": s,
-                "Score": score,
-                "BTC<EMA21": cond1,
-                "Weak+Vol": cond2,
-                "RSI<30": cond3,
-                "RSI": rsi_val,
-                "State": state
-            })
 
         progress_bar.progress((i + 1) / total_syms)
 
