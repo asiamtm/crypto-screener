@@ -2,8 +2,8 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import requests
-import time
 from ta.volatility import AverageTrueRange
+import time
 
 # === CONFIG ===
 REFRESH_MIN = 15
@@ -26,26 +26,24 @@ def load_symbols():
     df = pd.read_csv("Tickers.csv", header=None, names=["symbol"])
     return df.symbol.astype(str).tolist()
 
-def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2, retries=3, delay=5):
+# === Retry Logic ===
+from tenacity import retry, stop_after_attempt, wait_fixed
+
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(10))
+def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2):
     url = f"{SPOT_BASE}/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
-        for _ in range(retries):
-            try:
-                res = requests.get(url, timeout=10)
-                res.raise_for_status()
-                data = res.json()
-                df = pd.DataFrame(data, columns=[
-                    "ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
-                df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
-                df["ts"] = pd.to_datetime(df["ts"], unit="ms")
-                return df
-            except requests.exceptions.RequestException as e:
-                print(f"Failed to fetch {symbol}: {e}, retrying...")
-                time.sleep(delay)
-        return pd.DataFrame()
+        res = requests.get(url, timeout=10)
+        res.raise_for_status()  # Raises exception for non-2xx responses
+        data = res.json()
+        df = pd.DataFrame(data, columns=[
+            "ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
+        df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
+        df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+        return df
     except Exception as e:
-        print(f"Error while fetching data: {e}")
-        return pd.DataFrame()
+        print(f"Error fetching data for {symbol}: {e}")
+        return pd.DataFrame()  # Return empty dataframe on error
 
 def fetch_btc_trend():
     df = fetch_ohlcv("BTCUSDT", BTC_TF, 22)
@@ -61,8 +59,10 @@ def run_screening():
     btc_close, btc_ema21, btcBelow = fetch_btc_trend()
 
     for s in syms:
+        print(f"Fetching data for symbol: {s}")  # Add logging
         df = fetch_ohlcv(s, PAIR_TF)
         if df.empty or len(df) < ATR_LEN:
+            print(f"Skipping {s} due to insufficient data")
             continue
 
         close = df.c.iat[-1]
@@ -100,6 +100,7 @@ def run_screening():
     df_all = pd.DataFrame(rows).sort_values("Score", ascending=False)
     return df_all, btc_close, btc_ema21
 
+# === Streamlit UI ===
 st.title("🔥 Crypto PRE-DIP / PRE-PUMP Screener")
 with st.spinner("🔄 Loading latest data..."):
     df, btc_close, btc_ema21 = run_screening()
