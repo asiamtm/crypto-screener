@@ -4,6 +4,7 @@ import streamlit as st
 import requests
 import time
 from ta.volatility import AverageTrueRange
+import concurrent.futures
 
 # === CONFIG ===
 REFRESH_MIN = 15
@@ -21,30 +22,43 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# Button to clear cache
+if st.button("Clear Cache"):
+    st.cache_data.clear()
+    st.write("Cache cleared!")
+
 @st.cache_data(ttl=REFRESH_MIN * 60)
 def load_symbols():
-    # Replace with your actual file loading logic
     try:
-        df = pd.read_csv("Tickers.csv", header=None, names=["symbol"])
-        return df.symbol.astype(str).tolist()
+        # For testing, use a small list of symbols
+        # Replace with pd.read_csv("Tickers.csv", ...) once confirmed working
+        symbols = ["BTCUSDT", "ETHUSDT", "ADAUSDT", "BNBUSDT", "XRPUSDT"]
+        # Uncomment below to use Tickers.csv
+        # df = pd.read_csv("Tickers.csv", header=None, names=["symbol"])
+        # symbols = df.symbol.astype(str).tolist()
+        st.write(f"Loaded {len(symbols)} symbols")
+        return symbols
     except Exception as e:
         st.error(f"Error loading symbols: {e}")
         return []
 
-def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2):
+def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2, retries=3):
     url = f"{SPOT_BASE}/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    try:
-        st.write(f"Fetching data for symbol: {symbol}")  # Debugging line
-        res = requests.get(url, timeout=10)
-        res.raise_for_status()  # Raise an exception if the request fails
-        data = res.json()
-        df = pd.DataFrame(data, columns=["ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
-        df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
-        df["ts"] = pd.to_datetime(df["ts"], unit="ms")
-        return df
-    except Exception as e:
-        st.error(f"Error fetching data for {symbol}: {e}")
-        return pd.DataFrame()
+    for attempt in range(retries):
+        try:
+            st.write(f"Fetching data for {symbol} (Attempt {attempt + 1})")
+            res = requests.get(url, timeout=10)
+            res.raise_for_status()
+            data = res.json()
+            df = pd.DataFrame(data, columns=["ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
+            df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
+            df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+            return df
+        except Exception as e:
+            st.warning(f"Error fetching {symbol}: {e}. Retrying...")
+            time.sleep(2)
+    st.error(f"Failed to fetch data for {symbol} after {retries} attempts")
+    return pd.DataFrame()
 
 def fetch_btc_trend():
     df = fetch_ohlcv("BTCUSDT", BTC_TF, 22)
@@ -64,12 +78,15 @@ def run_screening():
         st.warning("No symbols to screen.")
         return pd.DataFrame(), btc_close, btc_ema21
 
-    st.write(f"Screening {len(syms)} symbols...")  # Debugging line
+    st.write(f"Screening {len(syms)} symbols...")
+    progress_bar = st.progress(0)
+    total_syms = len(syms)
 
-    for s in syms:
+    for i, s in enumerate(syms):
         df = fetch_ohlcv(s, PAIR_TF)
+        time.sleep(0.5)  # Delay to avoid rate limits
         if df.empty or len(df) < ATR_LEN:
-            st.write(f"Skipping {s} (no data or insufficient data)")  # Debugging line
+            st.write(f"Skipping {s} (no data or insufficient data)")
             continue
 
         close = df.c.iat[-1]
@@ -103,6 +120,8 @@ def run_screening():
                 "RSI": rsi_val,
                 "State": state
             })
+
+        progress_bar.progress((i + 1) / total_syms)
 
     df_all = pd.DataFrame(rows).sort_values("Score", ascending=False)
     return df_all, btc_close, btc_ema21
