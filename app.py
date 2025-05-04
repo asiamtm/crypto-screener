@@ -13,7 +13,19 @@ ATR_LEN = 96
 BODY_FCTR = 0.3
 VOL_MULT = 2.5
 
-SPOT_BASE = "https://api.binance.com/api/v3"
+SPOT_BASE = "https://api.binance.com/api/v3"  # Main Binance API
+# SPOT_BASE = "https://api.binance.us/api/v3"  # Uncomment for U.S. users if needed
+
+# Proxy configuration (replace with your proxy details)
+PROXIES = {
+    "http": "http://your-proxy:port",  # e.g., "http://123.45.67.89:8080"
+    "https": "http://your-proxy:port"
+}
+# If using a proxy with authentication, use:
+# PROXIES = {
+#     "http": "http://username:password@your-proxy:port",
+#     "https": "http://username:password@your-proxy:port"
+# }
 
 st.set_page_config(
     page_title="🔥 Crypto PRE-DIP Screener",
@@ -29,9 +41,9 @@ if st.button("Clear Cache"):
 @st.cache_data(ttl=REFRESH_MIN * 60)
 def load_symbols():
     try:
-        # For testing, use a small list of symbols
+        # Hardcoded symbols for testing
         symbols = ["BTCUSDT", "ETHUSDT", "ADAUSDT", "BNBUSDT", "XRPUSDT"]
-        # Uncomment below to use Tickers.csv
+        # Uncomment to use Tickers.csv
         # df = pd.read_csv("Tickers.csv", header=None, names=["symbol"])
         # symbols = df.symbol.astype(str).tolist()
         st.write(f"Loaded {len(symbols)} symbols")
@@ -45,7 +57,7 @@ def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2, retries=3):
     for attempt in range(retries):
         try:
             st.write(f"Fetching data for {symbol} (Attempt {attempt + 1})")
-            res = requests.get(url, timeout=10)
+            res = requests.get(url, timeout=10, proxies=PROXIES)
             res.raise_for_status()
             data = res.json()
             if not data:
@@ -55,11 +67,34 @@ def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2, retries=3):
             df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
             df["ts"] = pd.to_datetime(df["ts"], unit="ms")
             return df
+        except requests.exceptions.HTTPError as e:
+            if res.status_code == 451:
+                st.error(f"HTTP 451: Binance API unavailable for {symbol}. Check proxy or regional restrictions.")
+            else:
+                st.warning(f"Error fetching {symbol}: {e}. Retrying...")
+            time.sleep(2)
         except Exception as e:
             st.warning(f"Error fetching {symbol}: {e}. Retrying...")
             time.sleep(2)
     st.error(f"Failed to fetch data for {symbol} after {retries} attempts")
     return pd.DataFrame()
+
+# Alternative CoinGecko API (uncomment to use if Binance fails)
+# def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2):
+#     coin = symbol.replace("USDT", "").lower()  # e.g., "BTCUSDT" -> "bitcoin"
+#     url = f"https://api.coingecko.com/api/v3/coins/{coin}/ohlc?vs_currency=usd&days=7"
+#     try:
+#         st.write(f"Fetching data for {symbol} from CoinGecko")
+#         res = requests.get(url, timeout=10)
+#         res.raise_for_status()
+#         data = res.json()
+#         df = pd.DataFrame(data, columns=["ts", "o", "h", "l", "c"])
+#         df["v"] = 0.0  # CoinGecko doesn't provide volume
+#         df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+#         return df
+#     except Exception as e:
+#         st.error(f"Error fetching {symbol} from CoinGecko: {e}")
+#         return pd.DataFrame()
 
 def fetch_btc_trend():
     df = fetch_ohlcv("BTCUSDT", BTC_TF, 22)
@@ -142,7 +177,11 @@ def run_screening():
 
         progress_bar.progress((i + 1) / total_syms)
 
-    df_all = pd.DataFrame(rows).sort_values("Score", ascending=False)
+    df_all = pd.DataFrame(rows)
+    if not df_all.empty and "Score" in df_all.columns:
+        df_all = df_all.sort_values("Score", ascending=False)
+    else:
+        st.warning("No valid data processed. Check API availability, proxy settings, or symbol list.")
     return df_all, btc_close, btc_ema21
 
 st.title("🔥 Crypto PRE-DIP / PRE-PUMP Screener")
