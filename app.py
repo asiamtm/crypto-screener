@@ -2,8 +2,8 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import requests
-from ta.volatility import AverageTrueRange
 import time
+from ta.volatility import AverageTrueRange
 
 # === CONFIG ===
 REFRESH_MIN = 15
@@ -23,31 +23,33 @@ st.set_page_config(
 
 @st.cache_data(ttl=REFRESH_MIN * 60)
 def load_symbols():
-    df = pd.read_csv("Tickers.csv", header=None, names=["symbol"])
-    return df.symbol.astype(str).tolist()
+    # Replace with your actual file loading logic
+    try:
+        df = pd.read_csv("Tickers.csv", header=None, names=["symbol"])
+        return df.symbol.astype(str).tolist()
+    except Exception as e:
+        st.error(f"Error loading symbols: {e}")
+        return []
 
-# === Retry Logic ===
-from tenacity import retry, stop_after_attempt, wait_fixed
-
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(10))
 def fetch_ohlcv(symbol, interval, limit=ATR_LEN + 2):
     url = f"{SPOT_BASE}/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
+        st.write(f"Fetching data for symbol: {symbol}")  # Debugging line
         res = requests.get(url, timeout=10)
-        res.raise_for_status()  # Raises exception for non-2xx responses
+        res.raise_for_status()  # Raise an exception if the request fails
         data = res.json()
-        df = pd.DataFrame(data, columns=[
-            "ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
+        df = pd.DataFrame(data, columns=["ts", "o", "h", "l", "c", "v", "x1", "x2", "x3", "x4", "x5", "x6"])
         df = df.astype({"o": float, "h": float, "l": float, "c": float, "v": float})
         df["ts"] = pd.to_datetime(df["ts"], unit="ms")
         return df
     except Exception as e:
-        print(f"Error fetching data for {symbol}: {e}")
-        return pd.DataFrame()  # Return empty dataframe on error
+        st.error(f"Error fetching data for {symbol}: {e}")
+        return pd.DataFrame()
 
 def fetch_btc_trend():
     df = fetch_ohlcv("BTCUSDT", BTC_TF, 22)
     if df.empty:
+        st.warning("No data available for BTCUSDT.")
         return 0.0, 0.0, False
     close = df.c.iat[-1]
     ema = df.c.ewm(span=21).mean().iat[-1]
@@ -58,11 +60,16 @@ def run_screening():
     rows = []
     btc_close, btc_ema21, btcBelow = fetch_btc_trend()
 
+    if not syms:
+        st.warning("No symbols to screen.")
+        return pd.DataFrame(), btc_close, btc_ema21
+
+    st.write(f"Screening {len(syms)} symbols...")  # Debugging line
+
     for s in syms:
-        print(f"Fetching data for symbol: {s}")  # Add logging
         df = fetch_ohlcv(s, PAIR_TF)
         if df.empty or len(df) < ATR_LEN:
-            print(f"Skipping {s} due to insufficient data")
+            st.write(f"Skipping {s} (no data or insufficient data)")  # Debugging line
             continue
 
         close = df.c.iat[-1]
@@ -100,7 +107,6 @@ def run_screening():
     df_all = pd.DataFrame(rows).sort_values("Score", ascending=False)
     return df_all, btc_close, btc_ema21
 
-# === Streamlit UI ===
 st.title("🔥 Crypto PRE-DIP / PRE-PUMP Screener")
 with st.spinner("🔄 Loading latest data..."):
     df, btc_close, btc_ema21 = run_screening()
